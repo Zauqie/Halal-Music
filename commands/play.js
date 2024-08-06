@@ -18,160 +18,117 @@
 
 
 */
-const { ApplicationCommandOptionType, EmbedBuilder } = require('discord.js');
-const config = require("../config.js");
+const { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require('discord.js');
+const yts = require('yt-search');
+const lang = require('../loadlanguage.js'); 
+const musicIcons = require('../UI/icons/musicicons.js');
 
-const queueNames = [];
-const requesters = new Map(); 
 
-async function play(client, interaction) {
-    try {
-        const query = interaction.options.getString('name');
-
-        if (!interaction.member.voice.channelId) {
-            const embed = new EmbedBuilder()
-                .setColor('#ff0000')
-                .setTitle('Voice Channel Required')
-                .setDescription('❌ You need to be in a voice channel to use this command.');
-
-            await interaction.reply({ embeds: [embed], ephemeral: true });
-            return;
-        }
-
-        const player = client.riffy.createConnection({
-            guildId: interaction.guildId,
-            voiceChannel: interaction.member.voice.channelId,
-            textChannel: interaction.channelId,
-            deaf: true
-        });
-
-        await interaction.deferReply();
-
-        const resolve = await client.riffy.resolve({ query: query, requester: interaction.user.username });
-        //console.log('Resolve response:', resolve);
-
-        if (!resolve || typeof resolve !== 'object') {
-            throw new TypeError('Resolve response is not an object');
-        }
-
-        const { loadType, tracks, playlistInfo } = resolve;
-
-        if (!Array.isArray(tracks)) {
-            console.error('Expected tracks to be an array:', tracks);
-            throw new TypeError('Expected tracks to be an array');
-        }
-
-        if (loadType === 'PLAYLIST_LOADED') {
-            for (const track of tracks) {
-                track.info.requester = interaction.user.username; 
-                player.queue.add(track);
-                queueNames.push(`[${track.info.title} - ${track.info.author}](${track.info.uri})`);
-                requesters.set(track.info.uri, interaction.user.username); 
-            }
-
-            if (!player.playing && !player.paused) player.play();
-
-        } else if (loadType === 'SEARCH_RESULT' || loadType === 'TRACK_LOADED') {
-            const track = tracks.shift();
-            track.info.requester = interaction.user.username; 
-
-            player.queue.add(track);
-            queueNames.push(`[${track.info.title} - ${track.info.author}](${track.info.uri})`);
-            requesters.set(track.info.uri, interaction.user.username); 
-
-            if (!player.playing && !player.paused) player.play();
-        } else {
-            const errorEmbed = new EmbedBuilder()
-                .setColor(config.embedColor)
-                .setTitle('Error')
-                .setDescription('❌ No results found.');
-
-            await interaction.editReply({ embeds: [errorEmbed] });
-            return;
-        }
-
-        await new Promise(resolve => setTimeout(resolve, 500));
-
-        const embeds = [
-            new EmbedBuilder()
-                .setColor(config.embedColor)
-                .setAuthor({
-                    name: 'Request Update',
-                    iconURL: config.CheckmarkIcon,
-                    url: config.SupportServer
-                })
-                .setDescription('**➡️ Your request has been successfully processed.**\n**➡️ Please use buttons to control playback**')
-                 .setFooter({ text: '🎶 Enjoy your music!'}),
-
-            new EmbedBuilder()
-                .setColor(config.embedColor)
-                .setAuthor({
-                    name: 'Request Update',
-                    iconURL: config.CheckmarkIcon,
-                    url: config.SupportServer
-                })
-                .setDescription('**➡️ Your request has been successfully processed.**\n**➡️ Please use buttons to control playback**')
-                 .setFooter({ text: '🎶 Enjoy your music!'}),
-
-            new EmbedBuilder()
-                .setColor(config.embedColor)
-                .setAuthor({
-                    name: 'Request Update',
-                    iconURL: config.CheckmarkIcon,
-                    url: config.SupportServer
-                })
-                .setDescription('**➡️ Your request has been successfully processed.**\n**➡️ Please use buttons to control playback**')
-                .setFooter({ text: '🎶 Enjoy your music!'})
-        ];
-
-        const randomIndex = Math.floor(Math.random() * embeds.length);
-        await interaction.followUp({ embeds: [embeds[randomIndex]] });
-
-    } catch (error) {
-        console.error('Error processing play command:', error);
-        const errorEmbed = new EmbedBuilder()
-            .setColor('#ff0000')
-            .setTitle('Error')
-            .setDescription('❌ An error occurred while processing your request.');
-
-        await interaction.editReply({ embeds: [errorEmbed] });
-    }
-}
 
 module.exports = {
-    name: "play",
-    description: "Play a song from a name or link",
-    permissions: "0x0000000000000800",
-    options: [{
-        name: 'name',
-        description: 'Enter song name / link or playlist',
-        type: ApplicationCommandOptionType.String,
-        required: true
-    }],
-    run: play,
-    queueNames: queueNames,
-    requesters: requesters 
+  data: new SlashCommandBuilder()
+    .setName('play')
+    .setDescription(lang.findDescription)
+    .addStringOption(option => option.setName('query').setDescription('The search query').setRequired(true)),
+
+  async execute(interaction, client) {
+    const query = interaction.options.getString('query');
+    const voiceChannel = interaction.member.voice.channel;
+
+    if (!voiceChannel) {
+      const embed = new EmbedBuilder()
+        .setColor('#FF0000')
+        .setAuthor({ 
+          name: 'Alert!', 
+          iconURL: musicIcons.dotIcon,
+          url: "https://discord.gg/xQF9f9yUEM"
+        })
+        .setDescription(lang.findNoVoiceChannel);
+      return interaction.reply({ embeds: [embed] });
+    }
+
+    try {
+      // Defer the reply to give more time for processing the search results
+      await interaction.deferReply();
+
+      const searchResults = await yts(query);
+      const videos = searchResults.videos.slice(0, 10);
+
+      if (videos.length === 0) {
+        const embed = new EmbedBuilder()
+          .setColor('#FF0000')
+          .setAuthor({ 
+            name: 'No Results!', 
+            iconURL: musicIcons.dotIcon,
+            url: "https://discord.gg/xQF9f9yUEM"
+          })
+          .setDescription(lang.findNoResults);
+        return interaction.followUp({ embeds: [embed] });
+      }
+
+      const rows = [];
+      for (let i = 0; i < videos.length; i += 5) {
+        const buttons = videos.slice(i, i + 5).map((video, index) =>
+          new ButtonBuilder()
+            .setCustomId(`play_${i + index}`)
+            .setLabel(`${i + index + 1}`)
+            .setStyle(ButtonStyle.Primary)
+        );
+        rows.push(new ActionRowBuilder().addComponents(buttons));
+      }
+
+      const embed = new EmbedBuilder()
+        .setColor('#00FF00')
+        .setTitle(lang.findTitle)
+        .setDescription(lang.findPrompt)
+        .addFields(videos.map((video, i) => ({
+          name: `${i + 1}. ${video.title}`,
+          value: `${video.timestamp} | ${video.author.name}`,
+          inline: false
+        })));
+
+      await interaction.followUp({ embeds: [embed], components: rows });
+
+      const filter = i => i.customId.startsWith('play_') && i.user.id === interaction.user.id;
+      const collector = interaction.channel.createMessageComponentCollector({ filter, time: 15000 });
+
+      collector.on('collect', async i => {
+        const index = parseInt(i.customId.split('_')[1], 10);
+        const video = videos[index];
+
+        await i.reply({ content: lang.findSongSelected.replace('{title}', video.title), ephemeral: true });
+
+        try {
+          // Use distube.play to either start playing or add to the queue
+          await client.distube.play(voiceChannel, video.url, {
+            member: interaction.member,
+            textChannel: interaction.channel,
+          });
+
+          rows.forEach(row => {
+            row.components.forEach(button => button.setDisabled(true));
+          });
+
+          await interaction.editReply({ components: rows });
+
+        } catch (error) {
+          console.error(error);
+          await i.reply({ content: 'An error occurred while adding the song to the queue.', ephemeral: true });
+        }
+      });
+
+      collector.on('end', collected => {
+        if (collected.size === 0) {
+          rows.forEach(row => {
+            row.components.forEach(button => button.setDisabled(true));
+          });
+          interaction.editReply({ components: rows });
+        }
+      });
+
+    } catch (error) {
+      console.error(error);
+      await interaction.followUp('An error occurred while searching for the song.');
+    }
+  },
 };
-
-
-
-/*
-
-  ________.__                        _____.___.___________
- /  _____/|  | _____    ____  ____   \__  |   |\__    ___/
-/   \  ___|  | \__  \ _/ ___\/ __ \   /   |   |  |    |   
-\    \_\  \  |__/ __ \\  \__\  ___/   \____   |  |    |   
- \______  /____(____  /\___  >___  >  / ______|  |____|   
-        \/          \/     \/    \/   \/                  
-
-╔════════════════════════════════════════════════════════════════════════╗
-║                                                                        ║
-║  ## Created by GlaceYT!                                                ║
-║  ## Feel free to utilize any portion of the code                       ║
-║  ## DISCORD :  https://discord.com/invite/xQF9f9yUEM                   ║
-║  ## YouTube : https://www.youtube.com/@GlaceYt                         ║
-║                                                                        ║
-╚════════════════════════════════════════════════════════════════════════╝
-
-
-*/
